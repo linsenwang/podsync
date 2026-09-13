@@ -9,22 +9,37 @@ COPY . .
 
 RUN make build
 
-# Download yt-dlp
-RUN wget -O /usr/bin/yt-dlp https://github.com/yt-dlp/yt-dlp-nightly-builds/releases/latest/download/yt-dlp && \
-    chmod a+rwx /usr/bin/yt-dlp
-
 # Alpine 3.22 will go EOL on 2027-05-01
 FROM alpine:3.22
 
 WORKDIR /app
 
 # deno is required for yt-dlp (ref: https://github.com/yt-dlp/yt-dlp/issues/14404)
-RUN apk --no-cache add ca-certificates python3 py3-pip ffmpeg tzdata libc6-compat deno
+# inotify-tools 供入口脚本后台清理 feed XML 中的非法字符
+RUN apk --no-cache add ca-certificates python3 py3-pip ffmpeg tzdata libc6-compat deno inotify-tools
+
+# 使用 pip 安装 yt-dlp（而不是官方独立可执行文件），因为 B 站补丁需要 patch yt_dlp 模块
+RUN pip3 install --no-cache-dir --break-system-packages yt-dlp yt-dlp-ejs
 
 RUN chmod 777 /usr/local/bin
-COPY --from=builder /usr/bin/yt-dlp /usr/local/bin/youtube-dl
 COPY --from=builder /build/bin/podsync /app/podsync
 COPY --from=builder /build/html/index.html /app/html/index.html
 
-ENTRYPOINT ["/app/podsync"]
+# B 站补丁：playurl 风控参数注入 + __INITIAL_STATE__ 回退
+COPY patches/ /app/patches/
+# 全局 yt-dlp 配置：B 站请求头 + 重试退避
+COPY patches/yt-dlp.conf /etc/yt-dlp.conf
+
+# yt-dlp wrapper：先打 dm_img 补丁，再调用 yt_dlp 主入口。
+# 放在 /usr/local/bin，优先级高于 pip 生成的 /usr/bin/yt-dlp，pip 升级不会覆盖它。
+RUN cp /app/patches/yt_dlp_wrapper.py /usr/local/bin/yt-dlp && \
+    chmod +x /usr/local/bin/yt-dlp && \
+    ln -sf /usr/local/bin/yt-dlp /usr/local/bin/youtube-dl && \
+    ln -sf /usr/local/bin/yt-dlp /usr/bin/youtube-dl
+
+# 入口脚本：启动时自更新 yt-dlp、打 initial_state 补丁、清理非法 XML 字符
+COPY docker-entrypoint.sh /app/docker-entrypoint.sh
+RUN chmod +x /app/docker-entrypoint.sh
+
+ENTRYPOINT ["/app/docker-entrypoint.sh"]
 CMD ["--no-banner"]
