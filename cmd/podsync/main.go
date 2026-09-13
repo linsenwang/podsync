@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"sort"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -141,6 +142,16 @@ func main() {
 	cfg, err := LoadConfig(opts.ConfigPath)
 	if err != nil {
 		log.WithError(err).Fatal("failed to load configuration file")
+	}
+
+	// PODSYNC_FORCE_UPDATE=1 makes the initial run_on_start burst update every feed
+	// right away instead of trickling one by one. Later cron updates keep their jitter.
+	var forceUpdate bool
+	if parsed, err := strconv.ParseBool(os.Getenv("PODSYNC_FORCE_UPDATE")); err == nil {
+		forceUpdate = parsed
+	}
+	if forceUpdate {
+		log.Info("PODSYNC_FORCE_UPDATE is set, refreshing all feeds without delay")
 	}
 
 	if cfg.Log.Filename != "" {
@@ -281,7 +292,7 @@ func main() {
 
 	// Run cron scheduler
 	group.Go(func() error {
-		if err := feedRuntime.RegisterEnabledFeeds(cfg.Server.RunOnStart); err != nil {
+		if err := feedRuntime.RegisterEnabledFeeds(cfg.Server.RunOnStart, forceUpdate); err != nil {
 			log.WithError(err).Fatal("can't create cron task")
 		}
 

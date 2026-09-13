@@ -56,7 +56,11 @@ func newFeedRuntime(
 	}
 }
 
-func (r *feedRuntime) RegisterEnabledFeeds(runOnStart bool) error {
+// RegisterEnabledFeeds schedules every enabled feed and, when runOnStart is set,
+// queues them for an immediate update. skipUpdateDelay applies only to that initial
+// run: the queued feeds get a copy with no delay so a manual restart refreshes right
+// away, while the cron schedule keeps its per-feed jitter.
+func (r *feedRuntime) RegisterEnabledFeeds(runOnStart bool, skipUpdateDelay bool) error {
 	r.mu.Lock()
 
 	initialUpdates := make([]*feed.Config, 0, len(r.feeds))
@@ -72,7 +76,13 @@ func (r *feedRuntime) RegisterEnabledFeeds(runOnStart bool) error {
 		}
 
 		if runOnStart {
-			initialUpdates = append(initialUpdates, feedConfig)
+			if skipUpdateDelay {
+				queued := *feedConfig
+				queued.UpdateDelay = 0
+				initialUpdates = append(initialUpdates, &queued)
+			} else {
+				initialUpdates = append(initialUpdates, feedConfig)
+			}
 		}
 	}
 	r.mu.Unlock()
