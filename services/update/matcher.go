@@ -16,7 +16,7 @@ func matchRegexpFilter(pattern, str string, negative bool, logger log.FieldLogge
 			logger.Warnf("pattern %q is not a valid")
 		} else {
 			if matched == negative {
-				logger.Infof("skipping due to regexp mismatch")
+				logger.Debugf("skipping due to regexp mismatch")
 				return false
 			}
 		}
@@ -43,19 +43,19 @@ func matchFilters(episode *model.Episode, filters *feed.Filters) bool {
 	}
 
 	if filters.MaxDuration > 0 && episode.Duration > filters.MaxDuration {
-		logger.WithField("filter", "max_duration").Infof("skipping due to duration filter (%ds)", episode.Duration)
+		logger.WithField("filter", "max_duration").Debugf("skipping due to duration filter (%ds)", episode.Duration)
 		return false
 	}
 
 	if filters.MinDuration > 0 && episode.Duration < filters.MinDuration {
-		logger.WithField("filter", "min_duration").Infof("skipping due to duration filter (%ds)", episode.Duration)
+		logger.WithField("filter", "min_duration").Debugf("skipping due to duration filter (%ds)", episode.Duration)
 		return false
 	}
 
 	if filters.MaxAge > 0 {
 		dateDiff := int(time.Since(episode.PubDate).Hours()) / 24
 		if dateDiff > filters.MaxAge {
-			logger.WithField("filter", "max_age").Infof("skipping due to max_age filter (%dd > %dd)", dateDiff, filters.MaxAge)
+			logger.WithField("filter", "max_age").Debugf("skipping due to max_age filter (%dd > %dd)", dateDiff, filters.MaxAge)
 			return false
 		}
 	}
@@ -63,7 +63,7 @@ func matchFilters(episode *model.Episode, filters *feed.Filters) bool {
 	if filters.MinAge > 0 {
 		dateDiff := int(time.Since(episode.PubDate).Hours()) / 24
 		if dateDiff < filters.MinAge {
-			logger.WithField("filter", "min_age").Infof("skipping due to min_age filter (%dd < %dd)", dateDiff, filters.MinAge)
+			logger.WithField("filter", "min_age").Debugf("skipping due to min_age filter (%dd < %dd)", dateDiff, filters.MinAge)
 			return false
 		}
 	}

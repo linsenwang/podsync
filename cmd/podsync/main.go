@@ -98,9 +98,14 @@ func (s *updateSpacer) Wait(ctx context.Context, feedConfig *feed.Config) error 
 }
 
 func main() {
-	log.SetFormatter(&log.TextFormatter{
-		TimestampFormat: time.RFC3339,
-		FullTimestamp:   true,
+	log.SetFormatter(&lineHighlightFormatter{
+		inner: &log.TextFormatter{
+			TimestampFormat: time.RFC3339,
+			FullTimestamp:   true,
+			// DisableQuote keeps logrus from quoting values, so multi-line messages
+			// and the highlight escapes stay readable.
+			DisableQuote: true,
+		},
 	})
 
 	stop := make(chan os.Signal, 1)

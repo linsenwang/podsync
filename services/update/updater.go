@@ -21,6 +21,10 @@ import (
 	"github.com/yangtfu/podsync/pkg/ytdl"
 )
 
+// FieldHighlight flags a log entry for the CLI to render as a whole-line highlight
+// (see lineHighlightFormatter in cmd/podsync).
+const FieldHighlight = "highlight"
+
 type Downloader interface {
 	Download(ctx context.Context, feedConfig *feed.Config, episode *model.Episode) (io.ReadCloser, error)
 	PlaylistMetadata(ctx context.Context, url string) (metadata ytdl.PlaylistMetadata, err error)
@@ -175,7 +179,7 @@ func (u *Manager) fetchEpisodes(ctx context.Context, feedConfig *feed.Config) ([
 		)
 		if episode.Status != model.EpisodeNew && episode.Status != model.EpisodeError {
 			// File already downloaded
-			logger.Infof("skipping due to already downloaded")
+			logger.Debugf("skipping due to already downloaded")
 			return nil
 		}
 
@@ -209,7 +213,8 @@ func (u *Manager) downloadEpisodes(ctx context.Context, feedConfig *feed.Config,
 	)
 
 	if downloadCount > 0 {
-		log.WithField("feed_id", feedID).Infof("download count: %d", downloadCount)
+		// Flagged so the CLI renders the whole line highlighted.
+		log.WithFields(log.Fields{"feed_id": feedID, FieldHighlight: true}).Infof("download count: %d", downloadCount)
 	} else {
 		log.WithField("feed_id", feedID).Info("no episodes to download")
 		return nil
