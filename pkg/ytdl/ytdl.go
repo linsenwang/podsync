@@ -46,6 +46,9 @@ type PlaylistMetadata struct {
 
 var (
 	ErrTooManyRequests = errors.New(http.StatusText(http.StatusTooManyRequests))
+	// ErrInterrupted 表示 yt-dlp 是被进程退出（SIGTERM/容器重启）取消掉的，不是下载本身
+	// 失败。上层据此安静跳过：不刷 ERROR、不把 episode 标记成失败，下次刷新重新排队。
+	ErrInterrupted = errors.New("download interrupted by shutdown")
 )
 
 // Config is a youtube-dl related configuration
@@ -59,9 +62,12 @@ type Config struct {
 }
 
 type YoutubeDl struct {
-	path       string
-	timeout    time.Duration
-	updateLock sync.Mutex // Don't call youtube-dl while self updating
+	path    string
+	timeout time.Duration
+	// updateLock 只在自更新时独占，下载/取元数据持读锁：多个 worker 可以并行跑
+	// yt-dlp，而自更新仍会等到所有 yt-dlp 退出后再执行。
+	// （原来是 Mutex 且全程持有，等于给所有下载加了把全局串行锁。）
+	updateLock sync.RWMutex
 }
 
 func New(ctx context.Context, cfg Config) (*YoutubeDl, error) {
@@ -188,10 +194,15 @@ func (dl *YoutubeDl) PlaylistMetadata(ctx context.Context, url string) (metadata
 		"--no-warnings", // suppress warnings
 		url,
 	}
-	dl.updateLock.Lock()
-	defer dl.updateLock.Unlock()
+	dl.updateLock.RLock()
+	defer dl.updateLock.RUnlock()
 	output, err := dl.exec(ctx, args...)
 	if err != nil {
+		// 进程正在退出（容器重启/收到 SIGTERM）：yt-dlp 被取消不是失败，别刷 ERROR。
+		if err == ErrInterrupted {
+			return PlaylistMetadata{}, ErrInterrupted
+		}
+
 		log.WithError(err).Errorf("youtube-dl error: %s", url)
 
 		// YouTube might block host with HTTP Error 429: Too Many Requests
@@ -228,11 +239,18 @@ func (dl *YoutubeDl) Download(ctx context.Context, feedConfig *feed.Config, epis
 
 	args := buildArgs(feedConfig, episode, filePath)
 
-	dl.updateLock.Lock()
-	defer dl.updateLock.Unlock()
+	dl.updateLock.RLock()
+	defer dl.updateLock.RUnlock()
 
 	output, err := dl.exec(ctx, args...)
 	if err != nil {
+		// 进程正在退出：安静放弃这一次下载（临时目录由上面的 defer 清掉），
+		// episode 状态保持不变，下次刷新重新排队。
+		if err == ErrInterrupted {
+			log.WithField("episode_id", episode.ID).Info("download interrupted, aborting")
+			return nil, ErrInterrupted
+		}
+
 		log.WithError(err).Errorf("youtube-dl error: %s", filePath)
 
 		// YouTube might block host with HTTP Error 429: Too Many Requests
@@ -270,6 +288,12 @@ func (dl *YoutubeDl) exec(ctx context.Context, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, dl.path, args...)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
+		// 父 ctx 被取消 = 进程正在退出，此时 exec 会直接杀掉 yt-dlp（signal: killed）。
+		// 这不是下载失败，单独归类，交给上层安静跳过。
+		if ctx.Err() == context.Canceled {
+			return string(output), ErrInterrupted
+		}
+
 		return string(output), errors.Wrap(err, "failed to execute youtube-dl")
 	}
 

@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/hashicorp/go-multierror"
@@ -39,6 +40,8 @@ type Manager struct {
 	fs         fs.Storage
 	feeds      map[string]*feed.Config
 	keys       map[model.Provider]feed.KeyProvider
+	// buildOPML 每次 feed 更新都会重写同一个 podsync.opml，并发更新时串行化。
+	opmlMu sync.Mutex
 }
 
 func NewUpdater(
@@ -264,6 +267,13 @@ func (u *Manager) downloadEpisodes(ctx context.Context, feedConfig *feed.Config,
 				break
 			}
 
+			// 进程正在退出（容器重启/收到 SIGTERM）时上下文被取消，yt-dlp 会被直接杀掉。
+			// 这不是下载失败：保持 episode 原状态、不刷 ERROR，下次刷新会重新排队。
+			if errors.Is(err, ytdl.ErrInterrupted) {
+				logger.Info("download interrupted, will retry on the next update")
+				break
+			}
+
 			if err := u.db.UpdateEpisode(feedID, episode.ID, func(episode *model.Episode) error {
 				episode.Status = model.EpisodeError
 				return nil
@@ -345,6 +355,9 @@ func (u *Manager) buildXML(ctx context.Context, feedConfig *feed.Config) error {
 }
 
 func (u *Manager) buildOPML(ctx context.Context) error {
+	u.opmlMu.Lock()
+	defer u.opmlMu.Unlock()
+
 	// Build OPML with data received from builder
 	log.Debug("building podcast OPML")
 	opml, err := feed.BuildOPML(ctx, u.feeds, u.db, u.hostname)

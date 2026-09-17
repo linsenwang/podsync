@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"sort"
 	"strconv"
+	"sync"
 	"syscall"
 	"time"
 
@@ -59,6 +60,51 @@ func newUpdateSpacer() *updateSpacer {
 	return &updateSpacer{
 		rng: rand.New(rand.NewSource(time.Now().UnixNano())),
 	}
+}
+
+// 并发更新 feed 的 worker 数：默认 3，可用 PODSYNC_UPDATE_WORKERS 覆盖。
+// 一个 worker 卡在 yt-dlp 下载或 B 站风控重试上时，其余 feed 仍能推进。
+const defaultUpdateWorkers = 3
+
+func updateWorkerCount() int {
+	raw := os.Getenv("PODSYNC_UPDATE_WORKERS")
+	if raw == "" {
+		return defaultUpdateWorkers
+	}
+
+	count, err := strconv.Atoi(raw)
+	if err != nil || count < 1 {
+		log.Warnf("invalid PODSYNC_UPDATE_WORKERS=%q, falling back to %d workers", raw, defaultUpdateWorkers)
+		return defaultUpdateWorkers
+	}
+
+	return count
+}
+
+// feedLocks 保证同一个 feed 不会被两个 worker 同时更新：cron 只是把 feed 丢进队列，
+// 同一个 feed 在队列里可能有多份待处理项（比如启动时的全量刷新和正好到点的 cron）。
+// 单 worker 时靠串行天然互斥，多 worker 下必须显式加锁，否则会出现同一 episode 被
+// 并发下载、同一目标路径被两个写者覆盖。
+type feedLocks struct {
+	mu    sync.Mutex
+	locks map[string]*sync.Mutex
+}
+
+func newFeedLocks() *feedLocks {
+	return &feedLocks{locks: make(map[string]*sync.Mutex)}
+}
+
+func (l *feedLocks) get(feedID string) *sync.Mutex {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	lock, ok := l.locks[feedID]
+	if !ok {
+		lock = new(sync.Mutex)
+		l.locks[feedID] = lock
+	}
+
+	return lock
 }
 
 func sortedFeeds(feeds map[string]*feed.Config) []*feed.Config {
@@ -256,39 +302,58 @@ func main() {
 	c := cron.New(cron.WithChain(cron.SkipIfStillRunning(cron.DiscardLogger)))
 	feedRuntime := newFeedRuntime(database, cfg.Feeds, c, updates, manager.RebuildOPML)
 
-	// Run updates listener
-	group.Go(func() error {
-		spacer := newUpdateSpacer()
+	// Run updates listener：多个 worker 从同一个队列取 feed，这样一个 feed 卡在
+	// yt-dlp 下载或 B 站风控重试上时，其他 feed 仍然能推进。
+	updateWorkers := updateWorkerCount()
+	log.Infof("running %d feed update worker(s)", updateWorkers)
 
-		for {
-			select {
-			case _feed, ok := <-updates:
-				if !ok {
-					return nil
-				}
-				if !feedRuntime.IsEnabled(_feed.ID) {
-					log.WithField("feed_id", _feed.ID).Info("skipping disabled feed")
-					continue
-				}
-				if err := spacer.Wait(ctx, _feed); err != nil {
-					return err
-				}
-				if !feedRuntime.IsEnabled(_feed.ID) {
-					log.WithField("feed_id", _feed.ID).Info("skipping disabled feed")
-					continue
-				}
-				if err := manager.Update(ctx, _feed); err != nil {
-					log.WithError(err).WithField("feed_id", _feed.ID).Errorf("failed to update feed: %s", _feed.URL)
-				} else {
-					if next := feedRuntime.NextUpdate(_feed.ID); !next.IsZero() {
-						log.WithField("feed_id", _feed.ID).Infof("next update of %s: %s", _feed.ID, next)
+	feedLocks := newFeedLocks()
+
+	for i := 0; i < updateWorkers; i++ {
+		group.Go(func() error {
+			spacer := newUpdateSpacer()
+
+			for {
+				select {
+				case _feed, ok := <-updates:
+					if !ok {
+						return nil
 					}
+					if !feedRuntime.IsEnabled(_feed.ID) {
+						log.WithField("feed_id", _feed.ID).Info("skipping disabled feed")
+						continue
+					}
+					if err := spacer.Wait(ctx, _feed); err != nil {
+						return err
+					}
+					if !feedRuntime.IsEnabled(_feed.ID) {
+						log.WithField("feed_id", _feed.ID).Info("skipping disabled feed")
+						continue
+					}
+
+					lock := feedLocks.get(_feed.ID)
+					lock.Lock()
+					err := manager.Update(ctx, _feed)
+					lock.Unlock()
+
+					if err != nil {
+						// 退出时上下文被取消导致的失败不是故障，别刷 ERROR。
+						if ctx.Err() != nil {
+							log.WithField("feed_id", _feed.ID).Info("feed update interrupted by shutdown")
+						} else {
+							log.WithError(err).WithField("feed_id", _feed.ID).Errorf("failed to update feed: %s", _feed.URL)
+						}
+					} else {
+						if next := feedRuntime.NextUpdate(_feed.ID); !next.IsZero() {
+							log.WithField("feed_id", _feed.ID).Infof("next update of %s: %s", _feed.ID, next)
+						}
+					}
+				case <-ctx.Done():
+					return ctx.Err()
 				}
-			case <-ctx.Done():
-				return ctx.Err()
 			}
-		}
-	})
+		})
+	}
 
 	// Run cron scheduler
 	group.Go(func() error {
