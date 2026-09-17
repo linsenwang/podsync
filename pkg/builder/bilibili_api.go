@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	log "github.com/sirupsen/logrus"
 )
 
 // API URL常量
@@ -37,8 +39,20 @@ const (
 
 	MaxBilibiliPageSize = 100
 
-	maxBilibiliRequestAttempts = 2
+	// 实测 B 站对匿名请求的风控是“单次随机拒绝”（约 1/4 概率返回 -412），不是按 mid
+	// 封禁：同一个 mid 重试就能成功。但被拦后几秒内会连续被拦（风控窗口），所以
+	// 前面几次用秒级快重试，最后一次拉长到 45 秒，避免整条 feed 更新直接失败。
+	maxBilibiliRequestAttempts = 5
 )
+
+// bilibiliRetryBackoff 是第 2~5 次尝试前的等待时间（另加随机抖动）。
+// 原实现每次重试前睡 60~120 秒：命中的请求白等 1~2 分钟，而几秒就能恢复的占多数。
+var bilibiliRetryBackoff = []time.Duration{
+	2 * time.Second,
+	5 * time.Second,
+	10 * time.Second,
+	45 * time.Second,
+}
 
 // APIClient API客户端
 type APIClient struct {
@@ -101,8 +115,20 @@ func (c *APIClient) DoRequest(endpoint, url string, result any) error {
 
 	for attempt := 1; attempt <= maxBilibiliRequestAttempts; attempt++ {
 		if attempt > 1 {
-			sleep := time.Minute + time.Duration(rand.Intn(60))*time.Second
-			time.Sleep(sleep)
+			idx := attempt - 2
+			if idx >= len(bilibiliRetryBackoff) {
+				idx = len(bilibiliRetryBackoff) - 1
+			}
+			// 抖动一下，避免多个 worker 同时重试又同时被拦
+			backoff := bilibiliRetryBackoff[idx] + time.Duration(rand.Intn(1000))*time.Millisecond
+
+			log.WithFields(log.Fields{
+				"endpoint": endpoint,
+				"url":      url,
+				"attempt":  attempt,
+				"backoff":  backoff,
+			}).Warn("bilibili request was banned, retrying")
+			time.Sleep(backoff)
 		}
 
 		err := c.doRequestOnce(endpoint, url, result)
