@@ -18,6 +18,10 @@ const (
 	// https://api.bilibili.com/x/web-interface/view?bvid=BV1KDskz1EHD
 	EpisodeInfoAPI = "https://api.bilibili.com/x/web-interface/view?bvid=%s"
 
+	// 视频分P列表API，比 x/web-interface/view 轻量，只返回分P信息
+	// https://api.bilibili.com/x/player/pagelist?bvid=BV1KDskz1EHD
+	VideoPagesAPI = "https://api.bilibili.com/x/player/pagelist?bvid=%s"
+
 	// 用户信息API
 	UserInfoAPI = "https://api.bilibili.com/x/web-interface/card?mid=%s"
 
@@ -233,6 +237,38 @@ func (c *APIClient) GetEpisodeInfo(bvid string) (*EpisodeResponse, error) {
 	}
 
 	return &response, nil
+}
+
+// VideoPage 是视频的一个分P（多P投稿里的一期内容）
+type VideoPage struct {
+	CID      int64  `json:"cid"`
+	Page     int    `json:"page"`
+	From     string `json:"from"`
+	Part     string `json:"part"`
+	Duration int    `json:"duration"`
+}
+
+// 视频分P列表API响应结构体
+type VideoPagesResponse struct {
+	Code    int         `json:"code"`
+	Message string      `json:"message"`
+	Data    []VideoPage `json:"data"`
+}
+
+// GetVideoPages 获取视频的分P列表。单P视频返回一个元素，多P视频按 page 升序返回。
+func (c *APIClient) GetVideoPages(bvid string) ([]VideoPage, error) {
+	apiURL := fmt.Sprintf(VideoPagesAPI, bvid)
+
+	var response VideoPagesResponse
+	if err := c.DoRequest("video_pages", apiURL, &response); err != nil {
+		return nil, err
+	}
+
+	if response.Code != 0 {
+		return nil, bilibiliAPIError{Endpoint: "video_pages", URL: apiURL, Code: response.Code, Message: response.Message}
+	}
+
+	return response.Data, nil
 }
 
 // 用户信息API响应结构体
