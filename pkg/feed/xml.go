@@ -14,6 +14,36 @@ import (
 	"github.com/yangtfu/podsync/pkg/model"
 )
 
+// xmlChar implements the XML 1.0 Char production:
+//
+//	Char ::= #x9 | #xA | #xD | [#x20-#xD7FF] | [#xE000-#xFFFD] | [#x10000-#x10FFFF]
+//
+// encoding/xml enforces this for ordinary character data via EscapeText, but writes
+// `,cdata` fields verbatim. Several podcast fields below are `,cdata` (<itunes:summary>),
+// so without this a stray control byte from a Bilibili description (0x0B and 0x05 seen
+// in the wild) lands raw inside a CDATA section and makes the whole feed unparseable.
+// Returns -1 for characters strings.Map should drop.
+func xmlChar(r rune) rune {
+	switch {
+	case r == 0x9 || r == 0xA || r == 0xD:
+		return r
+	case r >= 0x20 && r <= 0xD7FF:
+		return r
+	case r >= 0xE000 && r <= 0xFFFD:
+		return r
+	case r >= 0x10000 && r <= 0x10FFFF:
+		return r
+	default:
+		return -1
+	}
+}
+
+// sanitizeXML strips characters that cannot appear in an XML 1.0 document. Invalid
+// UTF-8 decodes to U+FFFD, which is legal, so it is kept — same as EscapeText.
+func sanitizeXML(s string) string {
+	return strings.Map(xmlChar, s)
+}
+
 // sort.Interface implementation
 type timeSlice []*model.Episode
 
@@ -63,6 +93,11 @@ func Build(_ context.Context, feed *model.Feed, cfg *Config, hostname string) (*
 	if cfg.Custom.Link != "" {
 		feedLink = cfg.Custom.Link
 	}
+
+	title = sanitizeXML(title)
+	feedLink = sanitizeXML(feedLink)
+	description = sanitizeXML(description)
+	author = sanitizeXML(author)
 
 	p := itunes.New(title, feedLink, description, &feed.PubDate, &now)
 	p.Generator = podsyncGenerator
@@ -118,18 +153,23 @@ func Build(_ context.Context, feed *model.Feed, cfg *Config, hostname string) (*
 			continue
 		}
 
+		// Episode titles and descriptions reach both escaped character data and CDATA
+		// fields (ISubtitle/ISummary), so normalize them once here.
+		episodeTitle := sanitizeXML(episode.Title)
+		episodeDescription := sanitizeXML(episode.Description)
+
 		item := itunes.Item{
 			GUID:        episode.ID,
 			Link:        episode.VideoURL,
-			Title:       episode.Title,
-			Description: episode.Description,
-			ISubtitle:   episode.Title,
+			Title:       episodeTitle,
+			Description: episodeDescription,
+			ISubtitle:   episodeTitle,
 			// Some app prefer 1-based order
 			IOrder: strconv.Itoa(i + 1),
 		}
 
 		item.AddPubDate(&episode.PubDate)
-		item.AddSummary(episode.Description)
+		item.AddSummary(episodeDescription)
 		item.AddImage(episode.Thumbnail)
 		item.AddDuration(episode.Duration)
 

@@ -20,8 +20,7 @@ WORKDIR /app
 
 # deno is the JS runtime yt-dlp prefers (ref: https://github.com/yt-dlp/yt-dlp/issues/14404)
 # nodejs 也装上：现有 config.toml 的 YouTube feed 都显式传了 --js-runtimes node
-# inotify-tools 供入口脚本后台清理 feed XML 中的非法字符
-RUN apk --no-cache add ca-certificates python3 py3-pip ffmpeg tzdata libc6-compat deno nodejs inotify-tools
+RUN apk --no-cache add ca-certificates python3 py3-pip ffmpeg tzdata libc6-compat deno nodejs
 
 # 使用 pip 安装 yt-dlp（而不是官方独立可执行文件），因为 B 站补丁需要 patch yt_dlp 模块
 RUN pip3 install --no-cache-dir --break-system-packages yt-dlp yt-dlp-ejs

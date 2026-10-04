@@ -24,29 +24,5 @@ python3 /app/patches/bilibili_initial_state_patch.py || true
 
 echo "[$(date)] Current yt-dlp version: $(yt-dlp --version)"
 
-# 后台监控 feed XML，实时清理非法字符（0x00-0x08, 0x0B, 0x0C, 0x0E-0x1F）
-if command -v inotifywait >/dev/null 2>&1; then
-    (
-        # 等待 podsync 启动并创建 XML 文件
-        sleep 5
-        while true; do
-            if [ -d /app/data ]; then
-                inotifywait -e modify,create -r /app/data --include='.*\.xml$' 2>/dev/null | while read -r path file; do
-                    xml_file="${path}${file}"
-                    if [ -f "$xml_file" ]; then
-                        if tr -d '\000-\010\013\014\016-\037' < "$xml_file" > "${xml_file}.tmp" 2>/dev/null; then
-                            mv "${xml_file}.tmp" "$xml_file"
-                            echo "[$(date)] Cleaned XML: $xml_file"
-                        else
-                            rm -f "${xml_file}.tmp"
-                        fi
-                    fi
-                done
-            fi
-            sleep 1
-        done
-    ) &
-fi
-
 # 启动 podsync（主进程）
 exec /app/podsync "$@"
