@@ -3,6 +3,8 @@ package feed
 import (
 	"context"
 	"fmt"
+	"net/url"
+	"path"
 	"sort"
 	"strconv"
 	"strings"
@@ -140,16 +142,26 @@ func Build(_ context.Context, feed *model.Feed, cfg *Config, hostname string) (*
 
 	for _, episode := range feed.Episodes {
 		if episode.PubDate.IsZero() {
-			episode.PubDate = now
+			// RSS feeds keep the original ordering; falling back to "now" would
+			// move undated episodes to the top of the list.
+			if feed.Provider == model.ProviderRSS {
+				episode.PubDate = feed.PubDate
+			} else {
+				episode.PubDate = now
+			}
 		}
 	}
 
 	// Sort all episodes in descending order
 	sort.Sort(timeSlice(feed.Episodes))
 
+	isRSS := feed.Provider == model.ProviderRSS
 	for i, episode := range feed.Episodes {
-		if episode.Status != model.EpisodeDownloaded {
+		if !isRSS && episode.Status != model.EpisodeDownloaded {
 			// Skip episodes that are not yet downloaded or have been removed
+			continue
+		}
+		if isRSS && episode.VideoURL == "" {
 			continue
 		}
 
@@ -181,12 +193,17 @@ func Build(_ context.Context, feed *model.Feed, cfg *Config, hostname string) (*
 			enclosureType = EnclosureFromExtension(cfg)
 		}
 
-		var (
-			episodeName = EpisodeName(cfg, episode)
-			downloadURL = fmt.Sprintf("%s/%s/%s", strings.TrimRight(hostname, "/"), cfg.ID, episodeName)
-		)
+		if isRSS {
+			// RSS feeds are cached, not mirrored: keep the original media URL.
+			item.AddEnclosure(episode.VideoURL, EnclosureFromURL(episode.VideoURL), episode.Size)
+		} else {
+			var (
+				episodeName = EpisodeName(cfg, episode)
+				downloadURL = fmt.Sprintf("%s/%s/%s", strings.TrimRight(hostname, "/"), cfg.ID, episodeName)
+			)
 
-		item.AddEnclosure(downloadURL, enclosureType, episode.Size)
+			item.AddEnclosure(downloadURL, enclosureType, episode.Size)
+		}
 
 		// p.AddItem requires description to be not empty, use workaround
 		if item.Description == "" {
@@ -239,5 +256,30 @@ func EnclosureFromExtension(feedConfig *Config) itunes.EnclosureType {
 		return itunes.EPUB
 	default:
 		return -1
+	}
+}
+
+// EnclosureFromURL guesses the enclosure MIME type from a media URL. RSS feeds
+// keep their original URLs, so the extension is the only hint we have.
+func EnclosureFromURL(rawURL string) itunes.EnclosureType {
+	if parsed, err := url.Parse(rawURL); err == nil && parsed.Path != "" {
+		rawURL = parsed.Path
+	}
+
+	switch strings.ToLower(path.Ext(rawURL)) {
+	case ".m4a":
+		return itunes.M4A
+	case ".m4v":
+		return itunes.M4V
+	case ".mp4":
+		return itunes.MP4
+	case ".mov":
+		return itunes.MOV
+	case ".pdf":
+		return itunes.PDF
+	case ".epub":
+		return itunes.EPUB
+	default:
+		return itunes.MP3
 	}
 }

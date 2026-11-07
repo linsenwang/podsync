@@ -119,6 +119,13 @@ func sortedFeeds(feeds map[string]*feed.Config) []*feed.Config {
 		list = append(list, feeds[id])
 	}
 
+	// RSS feeds cost one HTTP GET and have no media download, so queue them
+	// first. After a restart the cached third-party feeds are available almost
+	// immediately instead of waiting behind a pile of yt-dlp downloads.
+	sort.SliceStable(list, func(i, j int) bool {
+		return list[i].Provider == model.ProviderRSS && list[j].Provider != model.ProviderRSS
+	})
+
 	return list
 }
 

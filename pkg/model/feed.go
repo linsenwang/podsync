@@ -74,4 +74,7 @@ const (
 	EpisodeDownloaded = EpisodeStatus("downloaded") // Downloaded, encoded and available for download
 	EpisodeError      = EpisodeStatus("error")      // Could not download, will retry
 	EpisodeCleaned    = EpisodeStatus("cleaned")    // Downloaded and later removed from disk due to update strategy
+	// EpisodeAvailable marks an episode that exists upstream but is served from its
+	// original URL (RSS feeds). It is never downloaded or cleaned up.
+	EpisodeAvailable = EpisodeStatus("available")
 )

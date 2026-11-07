@@ -13,6 +13,9 @@ type Config struct {
 	Enable *bool `toml:"enable"`
 	// URL is a full URL of the field
 	URL string `toml:"url"`
+	// Provider optionally overrides the provider inferred from URL.
+	// Set to "rss" to cache an arbitrary podcast RSS feed without downloading media.
+	Provider model.Provider `toml:"provider"`
 	// PageSize is the number of pages to query from YouTube API.
 	// NOTE: larger page sizes/often requests might drain your API token.
 	PageSize int `toml:"page_size"`

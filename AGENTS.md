@@ -4,7 +4,7 @@ This file provides guidance to Codex when working with code in this repository.
 
 ## Project Overview
 
-Podsync is a Go-based service that converts YouTube, Vimeo, SoundCloud and Bilibili channels into podcast feeds. It downloads video/audio content and generates RSS feeds that can be consumed by podcast clients.
+Podsync is a Go-based service that converts YouTube, Vimeo, SoundCloud and Bilibili channels into podcast feeds. It downloads video/audio content and generates RSS feeds that can be consumed by podcast clients. It can also cache arbitrary podcast RSS feeds (`provider = "rss"`) without downloading their media, so clients read the feed list from podsync instead of the upstream host.
 
 ## Key Architecture Components
 
@@ -13,7 +13,7 @@ Podsync is a Go-based service that converts YouTube, Vimeo, SoundCloud and Bilib
 - **config.go**: TOML configuration loading and validation with defaults
 
 ### Core Packages (`pkg/`)
-- **builder/**: Media downloaders for different platforms (YouTube, Vimeo, SoundCloud, Bilibili)
+- **builder/**: Media downloaders for different platforms (YouTube, Vimeo, SoundCloud, Bilibili) and the RSS feed cache
 - **feed/**: RSS/podcast feed generation and management, OPML export
 - **db/**: BadgerDB-based storage for metadata and state
 - **fs/**: Storage abstraction supporting local filesystem and S3-compatible storage

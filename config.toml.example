@@ -72,6 +72,11 @@ vimeo = [ # Multiple keys will be rotated.
   # URL address of a channel, group, user, or playlist.
   url = "https://www.youtube.com/channel/CHANNEL_NAME_TO_HOST"
 
+  # Optional. Overrides the provider inferred from the URL.
+  # Set to "rss" to cache an arbitrary podcast RSS feed: podsync periodically
+  # downloads the feed XML and serves a local copy, but never downloads media.
+  # provider = "rss"
+
   # The number of episodes to query each update (keep in mind, that this might drain API token)
   page_size = 50
 

@@ -10,6 +10,7 @@ const (
 	TypeUser     = Type("user")
 	TypeGroup    = Type("group")
 	TypeHandle   = Type("handle")
+	TypeFeed     = Type("feed")
 )
 
 type Provider string
@@ -20,6 +21,9 @@ const (
 	ProviderVimeo      = Provider("vimeo")
 	ProviderSoundcloud = Provider("soundcloud")
 	ProviderTwitch     = Provider("twitch")
+	// ProviderRSS caches an existing podcast RSS feed and serves a local copy.
+	// Media files stay on the original host; nothing is downloaded by podsync.
+	ProviderRSS = Provider("rss")
 )
 
 // Info represents data extracted from URL

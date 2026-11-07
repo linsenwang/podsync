@@ -72,8 +72,26 @@ func (u *Manager) Update(ctx context.Context, feedConfig *feed.Config) error {
 
 	started := time.Now()
 
-	if err := u.updateFeed(ctx, feedConfig); err != nil {
+	provider, err := feedProvider(feedConfig)
+	if err != nil {
+		return errors.Wrap(err, "failed to resolve provider")
+	}
+
+	if err := u.updateFeed(ctx, feedConfig, provider); err != nil {
 		return errors.Wrap(err, "update failed")
+	}
+
+	// RSS feeds are hosted as a cached list: episodes keep their original URLs and
+	// podsync never downloads media for them. Only rebuild the XML/OPML.
+	if provider == model.ProviderRSS {
+		if err := u.buildXML(ctx, feedConfig); err != nil {
+			return errors.Wrap(err, "xml build failed")
+		}
+		if err := u.buildOPML(ctx); err != nil {
+			return errors.Wrap(err, "opml build failed")
+		}
+		logger.Infof("successfully updated feed in %s", time.Since(started))
+		return nil
 	}
 
 	// Fetch episodes for download
@@ -103,16 +121,38 @@ func (u *Manager) Update(ctx context.Context, feedConfig *feed.Config) error {
 	return nil
 }
 
-// updateFeed pulls API for new episodes and saves them to database
-func (u *Manager) updateFeed(ctx context.Context, feedConfig *feed.Config) error {
-	logger := log.WithField("feed_id", feedConfig.ID)
+func feedProvider(feedConfig *feed.Config) (model.Provider, error) {
+	if feedConfig.Provider != "" {
+		return feedConfig.Provider, nil
+	}
 
 	info, err := builder.ParseURL(feedConfig.URL)
 	if err != nil {
-		return errors.Wrapf(err, "failed to parse URL: %s", feedConfig.URL)
+		return "", errors.Wrapf(err, "failed to parse URL: %s", feedConfig.URL)
 	}
+
+	return info.Provider, nil
+}
+
+// updateFeed pulls API for new episodes and saves them to database
+func (u *Manager) updateFeed(ctx context.Context, feedConfig *feed.Config, provider model.Provider) error {
+	logger := log.WithField("feed_id", feedConfig.ID)
+
+	info := model.Info{
+		LinkType: model.TypeFeed,
+		Provider: provider,
+		ItemID:   feedConfig.URL,
+	}
+	if feedConfig.Provider == "" {
+		parsed, err := builder.ParseURL(feedConfig.URL)
+		if err != nil {
+			return errors.Wrapf(err, "failed to parse URL: %s", feedConfig.URL)
+		}
+		info = parsed
+	}
+
 	key := ""
-	if info.Provider != model.ProviderBilibili {
+	if info.Provider != model.ProviderBilibili && info.Provider != model.ProviderRSS {
 		keyProvider, ok := u.keys[info.Provider]
 		if !ok {
 			return errors.Errorf("key provider %q not loaded", info.Provider)
@@ -121,14 +161,14 @@ func (u *Manager) updateFeed(ctx context.Context, feedConfig *feed.Config) error
 	}
 
 	// Create an updater for this feed type
-	provider, err := builder.New(ctx, info.Provider, key, u.downloader)
+	feedBuilder, err := builder.New(ctx, info.Provider, key, u.downloader)
 	if err != nil {
 		return err
 	}
 
 	// Query API to get episodes
 	logger.Debug("building feed")
-	result, err := provider.Build(ctx, feedConfig)
+	result, err := feedBuilder.Build(ctx, feedConfig)
 	if err != nil {
 		return err
 	}
